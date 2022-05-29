@@ -1,0 +1,201 @@
+/* Projeto Curto Circuito – Estação Meteorológica: IBM Watson */
+
+/*-------- Bibliotecas -----------*/
+#include <WiFi.h>
+#include <Wire.h>
+#include <PubSubClient.h> /* https://github.com/knolleary/pubsubclient/releases/tag/v2.3 */
+#include <ArduinoJson.h> /* https://github.com/bblanchon/ArduinoJson/releases/tag/v5.0.7 */
+#include "Esp32MQTTClient.h"
+/* ------ Configurações WiFi -------- */
+const char* ssid     = "Okura&Aguiar";
+const char* password = "*welcome03";
+/*-------- Conexão IBM-ESP32 ----------- */
+#define ORG "4jczl9" /* ID de organização */
+#define DEVICE_TYPE "ESP32" /* Insira o nome do componente */
+#define DEVICE_ID "TESTE" /* Insira o ID */
+#define TOKEN "a-4jczl9-rozrw4zy1b"/* Insira o Token */
+
+#define DHTTYPE DHT22
+#define DHTPIN 4
+
+/*-------- Comunicação IOT (Não mexer)-------- */
+char server[] = ORG ".messaging.internetofthings.ibmcloud.com";
+char authMethod[] = "use-token-auth";
+char token[] = TOKEN;
+char clientId[] = "d:" ORG ":" DEVICE_TYPE ":" DEVICE_ID;
+const char eventTopic[] = "iot-2/evt/status/fmt/json";
+const char cmdTopic[] = "iot-2/cmd/led/fmt/json";
+
+/*-------- Sensor de Chuva-------- */
+#define pino_d 14 /* Pino digital D14 do ESP32 */
+#define pino_a 35 /* Pino analógico D35 do ESP32 */
+int  val_a = 0;                 /* Chuva leitura analógica */
+int  val_d = 0;                 /* Chuva leitura digital */
+int result = 0 ;                /* Lógica que transforma a leitura do sensor em porcentagem. */
+
+/*-------- Sensor BME280 -------- */
+#include "DHT.h"
+#define DHTTYPE DHT22
+#define DHTPIN 4
+DHT dht(DHTPIN, DHTTYPE);
+
+/*-------- Sensor UV -------- */
+int UVOUT = 36;   /* Pino Out D36 do ESP32 */
+int REF   = 34;   /* Pino EN D34 do ESP32 */
+/*-------- LEDs e Contador--------*/
+int LED = 2;      /* Led do ESP */
+int RED = 23;     /* LED RGB pino vermelho */
+int BLUE = 5;     /* LED RGB pino azul */
+int GREEN = 4;    /* LED RGB pino green */
+int contagem = 0; /* Contagem crescente */
+WiFiClient wifiClient;
+void callback(char* topic, byte* payload, unsigned int payloadLength)
+{
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+
+  if ((char)payload[0] == '0')
+  { /* Se receber o caractere 0 */
+    digitalWrite(LED, LOW);   /* Desliga o LED */
+    Serial.println("LOW");
+  }
+  if ((char)payload[0] == '1')
+  { /* Se receber o caractere 1 */
+    digitalWrite(LED, HIGH);  /* Liga LED */
+    Serial.println("HIGH");
+  }
+}
+PubSubClient client(server, 1883, callback, wifiClient);
+
+void setup()
+{
+  Serial.begin(115200);
+  pinMode(LED, OUTPUT);
+  pinMode(RED, OUTPUT);
+  pinMode(BLUE, OUTPUT);
+  pinMode(GREEN, OUTPUT);
+  pinMode(UVOUT, INPUT);
+  pinMode(REF, INPUT);
+  client.setCallback(callback);
+  
+  /*---------Quando o sensor BME estiver conectado----------- */
+  wifiConnect();                 /* Direciona ao void wifiConnect */
+  mqttConnect();                 /* Direciona ao void mqttConnect */
+}
+void wifiConnect()
+{ /* Funções conectar ao Wi-Fi */
+  Serial.print("Conectando a rede:");
+  Serial.print(ssid);           /* Indica a rede Wi-Fi ao qual irá se conectado */
+  WiFi.begin(ssid, password);   /* Conecta ao ssid e o password configurado */
+  while (WiFi.status() != WL_CONNECTED)
+  { /* Enquanto o Wi-Fi estiver desconectado */
+    delay(500);                 /* Aguarda meio segundo */
+    Serial.print(".");
+  }
+  Serial.print("Rede Wi-Fi Conectada, Endereço de IP: ");
+  Serial.println(WiFi.localIP()); /* Indica o endereço de IP */
+}
+void mqttConnect()
+{ /* Funções conectar ao servidor */
+  if (!!!client.connected())
+  { /* Se não houver conexão com o servidor */
+    Serial.print("Reconectando ao servidor:");
+    Serial.println(server);      /* Indica o endereço do servidor */
+
+    while (!!!client.connect(clientId, authMethod, token) )
+    {
+      Serial.print(".");
+      delay(500);
+    }
+    if (client.subscribe(cmdTopic))
+    { /* Se conseguir se Conectar ao cmdTopic */
+      Serial.println("OK");   /* Escreve OK no monitor serial */
+    }
+    else
+    {
+      Serial.println("Erro"); /* Escreve erro no monitor serial */
+    }
+  }
+}
+void loop()
+{
+  if (!client.loop())
+  { /* Se Desconectar do Servidor */
+    mqttConnect();                     /* Retorna a função mqttConnect */
+  }
+  float h = dht.readHumidity();        /* Armazena os valor de leitura da Umidade */
+  float t = dht.readTemperature();     /* Armazena os valor de leitura da Temperatura */
+
+                       /* Finaliza a função */
+  delay(100);                                          /* Aguarda 100 milissegundos */
+  String payload2 = "{\"d\":{\"umi\":";                /* Inicia Payload2 */
+  payload2 += h;                                       /* Inclui o valor de h */
+  payload2 += "}}";                                    /* Finaliza a função */
+  Serial.print(" Umidade: "); Serial.println(payload2); /* Escreve no monitor serial */
+  client.publish(eventTopic, (char*) payload2.c_str() );/* Publica Payload2 */
+  delay(100);                                           /* Aguarda 100 milissegundos */
+  String payload3 = "{\"d\":{\"tem\":";                    /* Inicia Payload3 */
+  payload3 += t;                                           /* Inclui o valor de t */
+  payload3 += "}}";                                        /* Finaliza a função */
+  
+}
+void uv_test()
+{
+  int uvLevel = analogRead(UVOUT);           /* Armazena a leitura analógica do pino OUT */
+  int refLevel = analogRead(REF);            /* Armazena a leitura analógica do pino EN */
+  /* Use o valor de 3.3V como referencia no calculo de tensão */
+  float outputVoltage = 3.3 / refLevel * uvLevel; /* Indica a tensão de saída do sensor */
+  float uvIntensity = map(outputVoltage, 0.99, 2.9, 0.0, 15.0); /* Intensidade raios UV */
+  String payload7 = "{\"d\":{\"uvl\":";      /* Inicia Payload7 */
+  payload7 += uvLevel;                       /* Inclui o valor de uvLevel */
+  payload7 += "}}";                          /* Finaliza a função */
+  Serial.print(" Level: "); Serial.println(payload7); /* Escreve no monitor serial */
+  client.publish(eventTopic, (char*) payload7.c_str() ); /* Publica Payload7 */
+  delay(100);
+
+  String payload8 = "{\"d\":{\"volt\":";                 /* Inicia Payload8 */
+  payload8 += outputVoltage;                             /* Inclui o valor de outputVoltage */
+  payload8 += "}}";                                      /* Finaliza a função */
+  Serial.print(" Tensao: "); Serial.println(payload8);   /* Escreve no monitor serial */
+  client.publish(eventTopic, (char*) payload8.c_str() ); /* Publica Payload8 */
+  delay(100);
+
+  String payload9 = "{\"d\":{\"uvi\":";                  /* Inicia Payload9 */
+  payload9 += uvIntensity;                               /* Inclui o valor de uvIntensity */
+  payload9 += "}}";                                      /* Finaliza a função */
+  Serial.print(" Intensidade UV: "); Serial.println(payload9); /* Escreve no monitor serial */
+  client.publish(eventTopic, (char*) payload9.c_str() ); /* Publica Payload8 */
+  Serial.println();                                      /* Pula uma linha */
+  delay(1000);                                           /* Aguarda 1 segundo */
+  if (uvIntensity >= 0 && uvIntensity <= 2)
+  { /* Intensidade Baixa: Verde */
+    digitalWrite(RED, 0);
+    digitalWrite(BLUE, 0);
+    digitalWrite(GREEN, 1);                              /* Liga LED VERDE */
+  }
+  if (uvIntensity >= 3 && uvIntensity < 5)
+  { /* Intensidade Moderada: Amarelo */
+    digitalWrite(RED, 0);
+    digitalWrite(BLUE, 1);                               /* Liga LED AZUL */
+    digitalWrite(GREEN, 1);                              /* Liga LED VERDE */
+  }
+  if (uvIntensity == 6 || uvIntensity == 7)
+  { /* Intensidade Alta: Laranja */
+    digitalWrite(RED, 1);                                /* Liga LED VERMELHO */
+    digitalWrite(BLUE, 0);
+    digitalWrite(GREEN, 1);                              /* Liga LED VERDE */
+  }
+  if (uvIntensity >= 8 && uvIntensity < 10)
+  { /* Intensidade Elevada: Vermelho */
+    digitalWrite(RED, 1);                     /* Liga LED VERMELHO */
+    digitalWrite(BLUE, 0);
+    digitalWrite(GREEN, 0);
+  }
+  if (uvIntensity >= 11)
+  { /* Intensidade Elevada: Violeta */
+    digitalWrite(RED, 1);                     /* Liga LED VERMELHO */
+    digitalWrite(BLUE, 1);                    /* Liga LED AZUL */
+    digitalWrite(GREEN, 0);
+  }
+}
